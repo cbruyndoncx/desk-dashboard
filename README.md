@@ -1,5 +1,17 @@
 # Desk Dashboard
 
+> **What is covered**
+>
+> | Covered (one card per session) | How |
+> |---|---|
+> | Claude Code in a WSL terminal | hooks |
+> | Claude Code via the Obsidian Agent Client | hooks |
+> | Claude Desktop, Code tab | hooks (Windows `settings.json`) |
+> | Codex CLI and Codex / ChatGPT desktop app, incl. Work chats | Codex's local databases (no hooks needed) |
+> | Antigravity CLI (`agy`), also when started from Obsidian | agy's local databases |
+>
+> **Not covered:** plain chats in the Claude Desktop and ChatGPT desktop apps (no hooks, no readable local state). They only show up indirectly if the app sends a Windows notification. Other agents (e.g. Goose) are not wired up.
+
 A personal-dashboard screensaver for Windows, built for people who run coding agents in WSL2. When you step away it shows what needs your attention; when you sit back down the Windows logon screen appears.
 
 - **Agent sessions**: Claude Code (terminal, Obsidian Agent Client, desktop app), Codex (CLI, desktop app) and the Antigravity CLI (`agy`). Each card shows state, last message, turn duration, tool count, whether a question is outstanding, and a timeline of what changed since you left.
