@@ -1,40 +1,189 @@
 # Desk Dashboard
 
-A personal-dashboard screensaver for Windows (dev work in WSL2). When you step away it shows what needs your attention; when you sit back down the logon screen appears.
+A personal-dashboard screensaver for Windows, built for people who run coding agents in WSL2. When you step away it shows what needs your attention; when you sit back down the Windows logon screen appears.
 
-- **Agent sessions**: Claude Code (terminal, Obsidian Agent Client, desktop) and Codex (CLI, desktop) via hooks and by scanning Codex's local SQLite/rollout files. Each card shows state, last message, turn duration, tool count, whether a question is outstanding, and a "since you left" timeline.
-- **Windows Terminal tabs** (via UI Automation) to see which tabs are still spinning.
+- **Agent sessions**: Claude Code (terminal, Obsidian Agent Client, desktop app) and Codex (CLI, desktop app). Each card shows state, last message, turn duration, tool count, whether a question is outstanding, and a timeline of what changed since you left.
+- **Windows Terminal tabs**, read via UI Automation, to see which tabs are still spinning.
 - **Windows notifications**, grouped per app, read from the notification database.
-- **Today's todos** from an Obsidian daily note.
+- **Today's todos** from an Obsidian daily note (optional).
 
-## Layout
+## How it works
+
+```
+Claude Code / Codex ──hook.js──▶ ┌──────────────┐ ──SSE──▶ public/index.html
+Windows notifications, tabs ───▶ │  server.js   │            shown fullscreen by
+Codex SQLite, daily note ──────▶ │ 127.0.0.1:7777│            DeskDashboard.scr (WebView2)
+                                 └──────────────┘
+```
+
+The collector runs in WSL. The `.scr` is a small C# program that opens the page fullscreen, closes on any input, and then locks the workstation. If the collector is not running when the screensaver starts, the `.scr` starts it through `wsl.exe`.
+
+## Requirements
+
+- Windows 10/11 with the WebView2 runtime (preinstalled on Windows 11 and current Windows 10).
+- WSL2 with a distro that has **Node.js 22.5 or newer** (the collector uses the built-in `node:sqlite`; there are no npm dependencies) plus `curl` and `unzip`.
+- The .NET Framework 4 `csc.exe` that ships with Windows (nothing to install).
+
+Everything below runs in the WSL shell unless it says PowerShell. Replace `YOU` with your Windows user name and `<repo>` with the folder you cloned into.
+
+## 1. Clone and configure
+
+```bash
+git clone https://github.com/cbruyndoncx/desk-dashboard.git
+cd desk-dashboard
+cp config.example.json config.json
+```
+
+Edit `config.json`. The values that matter:
+
+| Key | Meaning |
+|---|---|
+| `dailyNoteDir` | Folder with your daily notes (the todo panel stays empty without it). `dailyNotePattern` is the file name, `YYYY-MM-DD.md` by default. |
+| `notificationDir` | `/mnt/c/Users/YOU/AppData/Local/Microsoft/Windows/Notifications` |
+| `notificationExcludeApps` | App names to hide from the notification panel. |
+| `codexSessionIndexes`, `codexSessionDirs`, `codexHomes` | Codex data folders, for WSL (`/home/YOU/.codex`) and Windows (`/mnt/c/Users/YOU/.codex`). Delete the entries for a Codex install you don't have. |
+| `sessionStaleMinutes` | Sessions idle longer than this disappear (default 240). |
+
+Check that the collector runs:
+
+```bash
+./run-server.sh &
+curl -s 127.0.0.1:7777/state | head -c 200   # JSON with sessions, notifications, tabs
+```
+
+Open <http://localhost:7777> in a browser to see the dashboard before you build the screensaver. Stop the collector with `kill %1`.
+
+## 2. Build the screensaver
+
+Download the WebView2 package and build into `C:\Users\YOU\DeskDashboard`:
+
+```bash
+mkdir ~/wv2 && cd ~/wv2
+curl -L -o wv2.nupkg https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2792.45
+unzip -q wv2.nupkg -d pkg
+cd <repo>
+scr/build.sh ~/wv2/pkg
+```
+
+`build.sh` copies the three WebView2 DLLs and the source there and compiles `DeskDashboard.scr`. It finds your Windows user name itself; set `WINUSER=YOU` if that fails. If it stops with "Permission denied", a previous instance still holds the DLLs: end `DeskDashboard.exe`/`msedgewebview2` in Task Manager and run it again.
+
+Tell the `.scr` where the collector lives. Create `C:\Users\YOU\DeskDashboard\DeskDashboard.cfg` (Notepad is fine):
+
+```
+distro=Ubuntu
+script=/home/YOU/<repo>/run-server.sh
+```
+
+`distro` is the name from `wsl -l`. Without this file the screensaver still displays the dashboard, but cannot start the collector by itself.
+
+## 3. Try it
+
+In PowerShell:
+
+```powershell
+& "C:\Users\YOU\DeskDashboard\DeskDashboard.scr" /s /hold
+```
+
+You should see the dashboard fullscreen. `/hold` ignores input for 12 seconds and does **not** lock, so it is safe for testing. Without `/hold`, any mouse move or key closes it and locks Windows. If nothing appears, read `%TEMP%\deskdashboard-error.txt`.
+
+## 4. Register as the Windows screensaver
+
+PowerShell, after editing the user name:
+
+```powershell
+$k = 'HKCU:\Control Panel\Desktop'
+Set-ItemProperty $k SCRNSAVE.EXE 'C:\Users\YOU\DeskDashboard\DeskDashboard.scr'
+Set-ItemProperty $k ScreenSaveActive 1
+Set-ItemProperty $k ScreenSaveTimeOut 300        # seconds idle before it starts
+Set-ItemProperty $k ScreenSaverIsSecure 1        # ask for logon on resume
+```
+
+The screensaver only starts while Windows is not turned off by the power plan, so set the display-off and sleep timeouts to longer than the screensaver timeout (Settings → System → Power, or `powercfg /change monitor-timeout-ac 0`). On a laptop that includes the battery timeouts.
+
+Windows' own "on resume, display logon screen" is not reliable for third-party screensavers, so the `.scr` also calls `LockWorkStation()` when it closes. You get the logon screen either way.
+
+## 5. Hotkey and autostart
+
+Start-menu shortcut with a hotkey (Ctrl+Alt+D) that starts the screensaver on demand, and a Startup shortcut that launches the collector at logon. First edit the path in `scr/start-collector.vbs` to your `run-server.sh` and copy it to the DeskDashboard folder:
+
+```bash
+cp scr/start-collector.vbs /mnt/c/Users/YOU/DeskDashboard/
+```
+
+Then, in PowerShell:
+
+```powershell
+$sh = New-Object -ComObject WScript.Shell
+$d = 'C:\Users\YOU\DeskDashboard'
+
+$l = $sh.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Desk Dashboard.lnk")
+$l.TargetPath = "$d\DeskDashboard.scr"; $l.Arguments = '/s'; $l.Hotkey = 'CTRL+ALT+D'; $l.Save()
+
+$l = $sh.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Desk Dashboard Collector.lnk")
+$l.TargetPath = 'wscript.exe'; $l.Arguments = "`"$d\start-collector.vbs`""; $l.WindowStyle = 7; $l.Save()
+```
+
+Windows hotkeys on shortcuts work from the Start-menu folder; it can take a moment (or a sign-out) before Ctrl+Alt+D is active.
+
+## 6. Connect your agents
+
+The dashboard works without this (terminal tabs, notifications and Codex via its database still show up), but live state, "needs permission" and "asking you" need hooks.
+
+**Claude Code in WSL**: add to `~/.claude/settings.json` (merge with an existing `hooks` block):
+
+```json
+{
+  "hooks": {
+    "SessionStart":     [{ "hooks": [{ "type": "command", "command": "node /home/YOU/<repo>/hook.js" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node /home/YOU/<repo>/hook.js" }] }],
+    "PreToolUse":       [{ "hooks": [{ "type": "command", "command": "node /home/YOU/<repo>/hook.js" }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "node /home/YOU/<repo>/hook.js" }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "node /home/YOU/<repo>/hook.js" }] }],
+    "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "node /home/YOU/<repo>/hook.js" }] }]
+  }
+}
+```
+
+The hook script forwards the event and always exits 0 with a 500 ms timeout, so it can't stall a session when the collector is down. Sessions started before you add the hooks only appear after their next event.
+
+**Claude Code on Windows** (desktop app, or `claude` in a Windows terminal): same events in `C:\Users\YOU\.claude\settings.json`, with this command instead (Windows has no `node hook.js` path into WSL):
+
+```
+curl.exe -s -m 1 -X POST -H "Content-Type: application/json" --data-binary @- "http://127.0.0.1:7777/event?agent=claude-desktop"
+```
+
+**Codex**: put the same hook block in `~/.codex/hooks.json` (and `C:\Users\YOU\.codex\hooks.json` for Windows) with `hook.js --agent codex`, or the `curl.exe` command with `?agent=codex`. Codex asks you to review and trust new hooks the first time; approve them yourself in Codex. Without trust, Codex sessions still appear through the SQLite scan, only without "waiting for permission".
+
+Check with a test event:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"hook_event_name":"UserPromptSubmit","session_id":"test","cwd":"/tmp/demo","prompt":"hello"}' \
+  "127.0.0.1:7777/event?agent=claude"
+```
+
+A "demo" card appears; remove it with the same call using `"hook_event_name":"SessionEnd"`.
+
+## Files
 
 | Path | What |
 |---|---|
-| `server.js` | Collector (Node 22+, no dependencies, uses `node:sqlite`). HTTP + SSE on `127.0.0.1:7777`. |
-| `hook.js` | Hook script for Claude Code / Codex: forwards hook JSON to the collector. |
-| `public/index.html` | The dashboard UI. |
-| `scr/DeskDashboard.cs` | The `.scr` host: fullscreen WebView2, exits on input, locks the workstation on exit. |
-| `scr/build.sh` | Compiles the `.scr` with the .NET Framework `csc.exe` already on Windows. |
-| `scr/start-collector.vbs` | Hidden autostart for the collector (put a shortcut in `shell:startup`). |
-| `config.example.json` | Copy to `config.json` and adjust the paths. |
+| `server.js` | Collector: HTTP + SSE on `127.0.0.1:7777`; `GET /state`, `POST /event`, `GET /events`. Env overrides: `DASH_PORT`, `DASH_NOTE_DIR`. |
+| `hook.js` | Hook script: forwards hook JSON from stdin to the collector. |
+| `public/index.html` | The dashboard UI. Double-click toggles browser fullscreen. |
+| `run-server.sh` | Starts the collector; finds nvm's node when `node` is not on PATH (set `NODE_BIN` to override). |
+| `scr/DeskDashboard.cs` | The `.scr` host. Flags: `/s` run, `/c` info box, `/p` no-op, `/hold` test mode. |
+| `scr/build.sh` | Compiles the `.scr`. |
+| `scr/start-collector.vbs` | Hidden collector start for the Startup shortcut. |
+| `config.example.json` | Template for `config.json` (git-ignored). |
 
-## Setup
+## Limits
 
-1. `cp config.example.json config.json` and fix the paths (daily-note folder, Codex homes, your Windows user).
-2. Download the `Microsoft.Web.WebView2` NuGet package (1.0.2792.45 was used), extract it, then `scr/build.sh <extracted-dir>`. It builds into `C:\Users\<you>\DeskDashboard`.
-3. Create `C:\Users\<you>\DeskDashboard\DeskDashboard.cfg`:
-   ```
-   distro=Ubuntu
-   script=/home/<you>/path/to/screensaver/run-server.sh
-   ```
-4. Edit the path in `scr/start-collector.vbs`, copy it to the same folder and add a shortcut to it in `shell:startup`.
-5. Register the screensaver (`HKCU\Control Panel\Desktop`: `SCRNSAVE.EXE`, `ScreenSaveActive=1`, `ScreenSaveTimeOut`, `ScreenSaverIsSecure=1`). Make a Start Menu shortcut to `DeskDashboard.scr /s` with a hotkey (e.g. Ctrl+Alt+D) to launch it on demand.
-6. Add hooks (`hook.js`) for the events SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification, Stop, SessionEnd to your Claude Code `settings.json` (and Codex `hooks.json`; Codex asks you to approve them).
+- "Still running" for a session relies on its Windows Terminal tab spinner, so it only works for sessions that have a tab.
+- "Asking you" is a heuristic: a last message ending in `?`, the `AskUserQuestion` tool, or Codex's `questions` field.
+- A screensaver cannot draw over the Windows lock screen, so nothing is shown after the machine has locked.
+- Developed on one machine (Windows 11, Ubuntu on WSL2); other setups may need path tweaks.
 
-`DeskDashboard.scr /s /hold` ignores input for 12 s and does not lock; it is meant for screenshots and testing.
+## Privacy
 
-## Notes
-
-- The collector only listens on localhost and stores nothing outside `state.json` (sessions) in this folder, which is git-ignored.
-- Windows' own "on resume, display logon screen" is not reliable for third-party screensavers, so the `.scr` calls `LockWorkStation()` itself when it closes.
+The collector listens on `127.0.0.1` only. It reads local files (transcripts, Codex databases, the notification database, your daily note) and keeps session state in `state.json` in this folder, which is git-ignored. Nothing leaves your machine.
