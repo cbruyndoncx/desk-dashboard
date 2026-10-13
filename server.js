@@ -6,6 +6,7 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+if (!cfg.agyHomes) cfg.agyHomes = [path.join(os.homedir(), '.gemini', 'antigravity-cli')];
 if (process.env.DASH_PORT) cfg.port = +process.env.DASH_PORT;
 if (process.env.DASH_NOTE_DIR) cfg.dailyNoteDir = process.env.DASH_NOTE_DIR;
 const PUBLIC = path.join(__dirname, 'public');
@@ -432,6 +433,122 @@ function scanCodexDb() {
   return changed;
 }
 
+
+// ---- Antigravity CLI (agy): per-conversation SQLite files, no hooks needed -------------------
+// steps.step_type 14 = user prompt (protobuf field 19.2), 15 = model turn (visible text in 20.1, reasoning in 20.3),
+// 132 = tool call (name 5.4.2). steps.status 2 = running, 3 = done, 9 = waiting for permission.
+const agyStamp = new Map(); // db path -> mtime stamp
+const agyTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agydb-'));
+function pbVarint(b, o) { let v = 0n, sh = 0n; for (;;) { const c = b[o++]; v |= BigInt(c & 127) << sh; if (!(c & 128)) break; sh += 7n; } return [v, o]; }
+// Collect printable string fields, keyed by dotted field path ("20.1").
+function pbStrings(b, prefix, out, depth) {
+  let o = 0;
+  while (o < b.length) {
+    let t; [t, o] = pbVarint(b, o);
+    const f = Number(t >> 3n), w = Number(t & 7n);
+    if (w === 0) { [, o] = pbVarint(b, o); }
+    else if (w === 1) o += 8;
+    else if (w === 5) o += 4;
+    else if (w === 2) {
+      let l; [l, o] = pbVarint(b, o); l = Number(l);
+      if (o + l > b.length) return;
+      const sub = b.subarray(o, o + l); o += l;
+      const str = sub.toString('utf8');
+      const key = prefix ? prefix + '.' + f : String(f);
+      if (str.length && !str.includes('�') && /^[\t\n\r\x20-\x7e -￿]+$/.test(str)) { if (!out[key]) out[key] = str; }
+      else if (depth < 4) pbStrings(sub, key, out, depth + 1);
+    } else return;
+  }
+}
+// metadata starts with a Timestamp message (field 1): seconds in its field 1.
+function stepTime(meta) {
+  try { const b = Buffer.from(meta); if (b[0] !== 0x0a) return 0; const [, o] = pbVarint(b, 1); if (b[o] !== 0x08) return 0; return Number(pbVarint(b, o + 1)[0]) * 1000; } catch { return 0; }
+}
+function scanAgy() {
+  let changed = false;
+  for (const home of cfg.agyHomes || []) {
+    const convDir = path.join(home, 'conversations');
+    let names;
+    try { names = fs.readdirSync(convDir).filter(f => f.endsWith('.db')); } catch { continue; }
+    const cutoff = Date.now() - cfg.sessionStaleMinutes * 60000;
+    let summaries = null;
+    const titleOf = id => {
+      if (summaries === null) {
+        summaries = new Map();
+        try {
+          const dir = path.join(agyTmp, 'sum'); fs.mkdirSync(dir, { recursive: true });
+          for (const x of ['', '-wal', '-shm']) { try { fs.copyFileSync(path.join(home, 'conversation_summaries.db' + x), path.join(dir, 'conversation_summaries.db' + x)); } catch {} }
+          const d = new DatabaseSync(path.join(dir, 'conversation_summaries.db'));
+          for (const r of d.prepare('SELECT conversation_id, title, parent_conversation_id FROM conversation_summaries').all()) summaries.set(r.conversation_id, r);
+          d.close();
+        } catch {}
+      }
+      return summaries.get(id) || {};
+    };
+    for (const name of names) {
+      const id = name.slice(0, -3), file = path.join(convDir, name);
+      let stamp = '';
+      try { stamp = ['', '-wal'].map(x => { try { return fs.statSync(file + x).mtimeMs; } catch { return 0; } }).join('/'); } catch { continue; }
+      const mt = Math.max(...stamp.split('/').map(Number));
+      if (mt < cutoff && !sessions.has(id)) continue;
+      const key = home + '|' + id;
+      const quiet = Date.now() - mt > 15000; // a "running" step with no writes for a while is re-evaluated each pass
+      if (agyStamp.get(key) === stamp && quiet) continue;
+      agyStamp.set(key, stamp);
+      try {
+        const dir = path.join(agyTmp, 'c'); fs.mkdirSync(dir, { recursive: true });
+        for (const x of ['', '-wal', '-shm']) { try { fs.copyFileSync(file + x, path.join(dir, 'c.db' + x)); } catch {} }
+        const db = new DatabaseSync(path.join(dir, 'c.db'));
+        const steps = db.prepare('SELECT idx, step_type, status, metadata, step_payload FROM steps ORDER BY idx').all();
+        db.close();
+        let lastUser = -1;
+        steps.forEach((r, i) => { if (r.step_type === 14) lastUser = i; });
+        if (lastUser < 0) continue;
+        const sum = titleOf(id);
+        if (sum.parent_conversation_id) continue; // sub-agent conversation
+        const f = {}; pbStrings(Buffer.from(steps[lastUser].step_payload), '', f, 0);
+        const prompt = (f['19.2'] || '').slice(0, 200);
+        const cwd = (f['19.12.12'] || '').replace(/^file:\/\//, '').replace(/%20/g, ' ');
+        const turnSteps = steps.slice(lastUser + 1);
+        const tools = turnSteps.filter(r => r.step_type === 132).length;
+        const last = steps[steps.length - 1];
+        let text = '', tool = '';
+        for (const r of turnSteps) {
+          const g = {}; pbStrings(Buffer.from(r.step_payload), '', g, 0);
+          if (r.step_type === 15 && g['20.1']) text = g['20.1'];
+          if (r.step_type === 132 && g['5.4.2']) tool = g['5.4.2'];
+        }
+        const startMs = stepTime(steps[lastUser].metadata) || mt;
+        const endMs = Math.max(stepTime(last.metadata), 0) || mt;
+        const lastIsAnswer = last.step_type === 15 && last.status === 3 && !!text;
+        const waiting = turnSteps.some(r => r.status === 9);
+        const running = turnSteps.some(r => r.status === 2) || (!lastIsAnswer && !waiting && Date.now() - mt < 20000);
+        const status = waiting ? 'waiting' : running ? 'working' : lastIsAnswer ? 'done' : 'idle';
+        const ex = sessions.get(id);
+        const next = {
+          ...(ex || {}), id, agent: 'agy', cwd, project: cwd.split(/[\\/]/).filter(Boolean).pop() || '',
+          status, detail: waiting ? 'permission: ' + (tool || 'tool') : running ? tool : status === 'done' ? 'finished' : '',
+          prompt, updated: endMs || mt, attention: status === 'done' || waiting,
+          title: sum.title || ex?.title || prompt.slice(0, 60),
+        };
+        next.asking = status === 'done' && looksLikeQuestion(text);
+        if (text) next.lastMessage = text.slice(-600);
+        if (status === 'working') next.turn = { start: startMs, tools };
+        else if (status === 'done') next.lastTurn = { ms: Math.max(0, endMs - startMs), tools, end: endMs };
+        if (!ex || ex.status !== status || ex.prompt !== prompt) {
+          if (!ex || ex.prompt !== prompt) logEvent(next, 'prompt: "' + prompt.slice(0, 60) + '"');
+          if (status === 'working') logEvent(next, 'working');
+          else if (status === 'waiting') logEvent(next, 'needs permission: ' + (tool || 'tool'));
+          else if (status === 'done') logEvent(next, `done in ${fmtDur(next.lastTurn.ms)} (${tools} tool${tools === 1 ? '' : 's'})` + (next.asking ? ', asks you a question' : ''));
+        }
+        if (!ex || ex.status !== next.status || ex.title !== next.title || ex.updated !== next.updated || ex.lastMessage !== next.lastMessage || ex.detail !== next.detail) { sessions.set(id, next); changed = true; }
+      } catch (e) { console.error('agy db:', e.message); }
+    }
+  }
+  if (changed) saveSessions();
+  return changed;
+}
+
 // ---- state + SSE ----------------------------------------------------------
 const clients = new Set();
 const snapshot = () => ({ now: Date.now(), sessions: liveSessions(), todos, notifications, tabs, clients: clients.size });
@@ -440,7 +557,7 @@ function broadcast() {
   for (const c of clients) c.write(data);
 }
 
-setInterval(() => { const a = loadTodos(), b = loadNotifications(), c = scanCodex(), e = scanCodexDb(); if (a || b || c || e) broadcast(); }, 5000); // drvfs has no reliable inotify
+setInterval(() => { const a = loadTodos(), b = loadNotifications(), c = scanCodex(), e = scanCodexDb(), g = scanAgy(); if (a || b || c || e || g) broadcast(); }, 5000); // drvfs has no reliable inotify
 setInterval(pollTabs, 6000);
 pollTabs();
 setInterval(broadcast, 30000); // refresh relative ages / stale pruning
@@ -448,6 +565,7 @@ loadTodos();
 loadNotifications();
 scanCodex();
 scanCodexDb();
+scanAgy();
 
 // ---- http -----------------------------------------------------------------
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };

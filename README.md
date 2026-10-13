@@ -2,7 +2,7 @@
 
 A personal-dashboard screensaver for Windows, built for people who run coding agents in WSL2. When you step away it shows what needs your attention; when you sit back down the Windows logon screen appears.
 
-- **Agent sessions**: Claude Code (terminal, Obsidian Agent Client, desktop app) and Codex (CLI, desktop app). Each card shows state, last message, turn duration, tool count, whether a question is outstanding, and a timeline of what changed since you left.
+- **Agent sessions**: Claude Code (terminal, Obsidian Agent Client, desktop app), Codex (CLI, desktop app) and the Antigravity CLI (`agy`). Each card shows state, last message, turn duration, tool count, whether a question is outstanding, and a timeline of what changed since you left.
 - **Windows Terminal tabs**, read via UI Automation, to see which tabs are still spinning.
 - **Windows notifications**, grouped per app, read from the notification database.
 - **Today's todos** from an Obsidian daily note (optional).
@@ -42,6 +42,7 @@ Edit `config.json`. The values that matter:
 | `notificationDir` | `/mnt/c/Users/YOU/AppData/Local/Microsoft/Windows/Notifications` |
 | `notificationExcludeApps` | App names to hide from the notification panel. |
 | `codexSessionIndexes`, `codexSessionDirs`, `codexHomes` | Codex data folders, for WSL (`/home/YOU/.codex`) and Windows (`/mnt/c/Users/YOU/.codex`). Delete the entries for a Codex install you don't have. |
+| `agyHomes` | Antigravity CLI data folder(s), default `~/.gemini/antigravity-cli`. Delete the entry if you don't use `agy`. |
 | `sessionStaleMinutes` | Sessions idle longer than this disappear (default 240). |
 
 Check that the collector runs:
@@ -154,6 +155,8 @@ curl.exe -s -m 1 -X POST -H "Content-Type: application/json" --data-binary @- "h
 
 **Codex**: put the same hook block in `~/.codex/hooks.json` (and `C:\Users\YOU\.codex\hooks.json` for Windows) with `hook.js --agent codex`, or the `curl.exe` command with `?agent=codex`. Codex asks you to review and trust new hooks the first time; approve them yourself in Codex. Without trust, Codex sessions still appear through the SQLite scan, only without "waiting for permission".
 
+**Antigravity CLI (`agy`)**: nothing to configure. The collector reads agy's own per-conversation SQLite files (`~/.gemini/antigravity-cli/conversations`), so working / waiting for permission / done, the last answer and the tool count show up without hooks. This relies on agy's internal, undocumented format (tested with agy 1.3.3) and may break after an update.
+
 Check with a test event:
 
 ```bash
@@ -182,6 +185,7 @@ A "demo" card appears; remove it with the same call using `"hook_event_name":"Se
 - "Still running" for a session relies on its Windows Terminal tab spinner, so it only works for sessions that have a tab.
 - "Asking you" is a heuristic: a last message ending in `?`, the `AskUserQuestion` tool, or Codex's `questions` field.
 - A screensaver cannot draw over the Windows lock screen, so nothing is shown after the machine has locked.
+- `agy` sessions are only seen while the conversation database changes; a question the model asks in plain text is flagged by the same `?` heuristic as for the other agents.
 - Developed on one machine (Windows 11, Ubuntu on WSL2); other setups may need path tweaks.
 
 ## Privacy

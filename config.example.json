@@ -17,5 +17,8 @@
   "codexHomes": [
     "/home/YOU/.codex",
     "/mnt/c/Users/YOU/.codex"
+  ],
+  "agyHomes": [
+    "/home/YOU/.gemini/antigravity-cli"
   ]
 }
