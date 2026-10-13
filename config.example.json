@@ -1,0 +1,21 @@
+{
+  "port": 7777,
+  "dailyNoteDir": "/mnt/c/Users/YOU/Documents/Vault/Daily",
+  "dailyNotePattern": "YYYY-MM-DD.md",
+  "sessionStaleMinutes": 240,
+  "notificationDir": "/mnt/c/Users/YOU/AppData/Local/Microsoft/Windows/Notifications",
+  "maxNotifications": 30,
+  "notificationExcludeApps": [],
+  "codexSessionIndexes": [
+    "/home/YOU/.codex/session_index.jsonl",
+    "/mnt/c/Users/YOU/.codex/session_index.jsonl"
+  ],
+  "codexSessionDirs": [
+    "/home/YOU/.codex/sessions",
+    "/mnt/c/Users/YOU/.codex/sessions"
+  ],
+  "codexHomes": [
+    "/home/YOU/.codex",
+    "/mnt/c/Users/YOU/.codex"
+  ]
+}
