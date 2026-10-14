@@ -18,7 +18,7 @@ static class Program
     const int Port = 7777;
     // Defaults; override with a DeskDashboard.cfg next to the .scr (lines "distro=..." and "script=...").
     static string Distro = "Ubuntu";
-    static string ServerScript = "/path/to/screensaver/run-server.sh";
+    static string ServerScript = "/path/to/desk-dashboard/run-server.sh";
 
     static void LoadCfg()
     {
