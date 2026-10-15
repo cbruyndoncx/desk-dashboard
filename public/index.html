@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <title>Desk Dashboard</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { --bg:#0e1116; --panel:#171b22; --card:#1d222b; --text:#e6e9ef; --dim:#8a93a3;
@@ -24,7 +27,7 @@
   #tabsrow { display:flex; align-items:center; gap:8px; padding:2px 28px 8px; overflow:hidden; white-space:nowrap; }
   #tabsrow h2 { margin:0 6px 0 0; }
   .tab { display:flex; align-items:center; gap:6px; background:var(--panel); border-radius:6px; padding:3px 10px; font-size:13px; border:1px solid transparent; flex:none; max-width:300px; }
-  .tab span.n { overflow:hidden; text-overflow:ellipsis; }
+  .tab span.n { overflow:hidden; text-overflow:ellipsis; padding:0; border:0; }
   .tab.sel { border-color:#3a4252; }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); flex:none; }
   .tab.working .dot { background:var(--working); animation:blink 1s infinite; }
@@ -79,6 +82,20 @@
   .n .t { font-weight:600; } .n .b { color:var(--dim); font-size:14px; }
   .n.isnew { border-left:3px solid var(--working); padding-left:10px; }
   .empty { color:var(--dim); }
+  #tabs { display:flex; gap:8px; }
+
+  /* ---- two-screen mode (?view=main on the primary screen, ?view=side on the second) ---- */
+  body.view-main #tabsrow, body.view-main .side { display:none; }
+  body.view-main main { grid-template-columns:1fr; }
+  body.view-side #away, body.view-side #chips, body.view-side #tabsrow, body.view-side #sessec { display:none; }
+  body.view-side main { grid-template-columns:1fr 1.6fr; grid-template-rows:auto 1fr; }
+  body.view-side .side { display:contents; }
+  body.view-side #tabsec { display:block; grid-column:1; grid-row:1; max-height:55vh; }
+  body.view-side #todosec { grid-column:1; grid-row:2; max-height:none; }
+  body.view-side #notsec { grid-column:2; grid-row:1 / 3; }
+  #tabsec { display:none; }
+  #tabsec #tabs { flex-direction:column; }
+  #tabsec .tab { max-width:none; font-size:15px; padding:6px 12px; background:var(--card); }
 </style>
 </head>
 <body>
@@ -87,23 +104,29 @@
   <div id="away"></div>
   <div id="chips"></div>
 </header>
-<div id="tabsrow"><h2>Tabs</h2><div id="tabs" style="display:flex;gap:8px"></div></div>
+<div id="tabsrow"><h2>Tabs</h2><div id="tabs"></div></div>
 <main>
-  <section><h2>Agent sessions</h2><div id="sessions" class="grid"></div></section>
+  <section id="sessec"><h2>Agent sessions</h2><div id="sessions" class="grid"></div></section>
+  <section id="tabsec"><h2>Tabs</h2></section>
   <div class="side">
-    <section><h2>Today</h2><div id="todos"></div></section>
-    <section><h2>Notifications</h2><div id="notifs"></div></section>
+    <section id="todosec"><h2>Today</h2><div id="todos"></div></section>
+    <section id="notsec"><h2>Notifications</h2><div id="notifs"></div></section>
   </div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const SINCE = +new URLSearchParams(location.search).get('since') || 0; // set by the screensaver host
-let state = { sessions: [], todos: { items: [] }, notifications: [], tabs: [] };
+const params = new URLSearchParams(location.search);
+const SINCE = +params.get('since') || 0; // set by the screensaver host
+const VIEW = params.get('view') || ''; // 'main' / 'side' when the screensaver spans two screens
+if (VIEW) document.body.classList.add('view-' + VIEW);
+if (VIEW === 'side') $('tabsec').appendChild($('tabs'));
+let state = { sessions: [], todos: { items: [] }, notifications: [], tabs: [], ui: {} };
+const loc = () => (state.ui && state.ui.dateLocale) || undefined; // undefined = system locale
 
 const ago = ms => { const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? s + 's ago' : s < 3600 ? Math.round(s / 60) + 'm ago' : Math.round(s / 3600) + 'h ago'; };
 const dur = ms => ms < 60000 ? Math.max(1, Math.round(ms / 1000)) + 's' : Math.round(ms / 60000) + 'm';
-const hm = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const hm = ms => new Date(ms).toLocaleTimeString(loc(), { hour: '2-digit', minute: '2-digit' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const isNew = t => SINCE && t > SINCE;
 
@@ -210,7 +233,7 @@ function render() {
   const gl = [...groups.values()].sort((a, b) => b.time - a.time);
   $('notifs').innerHTML = gl.length ? gl.map(g => {
     const items = g.items.slice().sort((a, b) => b.time - a.time);
-    const shown = items.slice(0, 2), more = g.total - shown.reduce((a, n) => a + n.count, 0);
+    const shown = items.slice(0, VIEW === 'side' ? 5 : 2), more = g.total - shown.reduce((a, n) => a + n.count, 0);
     return `<div class="n${g.fresh ? ' isnew' : ''}"><div class="a"><span>${esc(g.app)} · ${g.total}${g.fresh ? ' · ' + g.fresh + ' new' : ''}</span><span>${ago(g.time)}</span></div>` +
       shown.map(n => `<div class="t">${esc(n.title)}${n.count > 1 ? ' ×' + n.count : ''}</div>${n.body ? `<div class="b">${esc(n.body)}</div>` : ''}`).join('') +
       (more > 0 ? `<div class="b">+${more} more</div>` : '') + '</div>';
@@ -219,8 +242,8 @@ function render() {
 
 function tick() {
   const d = new Date();
-  $('clock').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  $('date').textContent = d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+  $('clock').textContent = d.toLocaleTimeString(loc(), { hour: '2-digit', minute: '2-digit' });
+  $('date').textContent = d.toLocaleDateString(loc(), { weekday: 'long', day: 'numeric', month: 'long' });
 }
 tick(); setInterval(tick, 1000); setInterval(render, 15000);
 

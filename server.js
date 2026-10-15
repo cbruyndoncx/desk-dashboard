@@ -551,7 +551,14 @@ function scanAgy() {
 
 // ---- state + SSE ----------------------------------------------------------
 const clients = new Set();
-const snapshot = () => ({ now: Date.now(), sessions: liveSessions(), todos, notifications, tabs, clients: clients.size });
+// Display settings the page and the .scr read; see config.example.json.
+const ui = () => ({ secondScreen: !!cfg.secondScreen, dateLocale: cfg.dateLocale || '' });
+// Age cutoff is applied per snapshot, not at load, so old toasts drop off even when the database doesn't change.
+const liveNotifications = () => {
+  const max = (cfg.notificationMaxAgeHours || 0) * 3600000;
+  return max ? notifications.filter(n => Date.now() - n.time < max) : notifications;
+};
+const snapshot = () => ({ now: Date.now(), sessions: liveSessions(), todos, notifications: liveNotifications(), tabs, ui: ui(), clients: clients.size });
 function broadcast() {
   const data = `data: ${JSON.stringify(snapshot())}\n\n`;
   for (const c of clients) c.write(data);
@@ -568,7 +575,7 @@ scanCodexDb();
 scanAgy();
 
 // ---- http -----------------------------------------------------------------
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png' };
 
 http.createServer((req, res) => {
   const url = req.url.split('?')[0];
@@ -584,6 +591,8 @@ http.createServer((req, res) => {
       } catch {}
       res.writeHead(204).end();
     });
+  } else if (url === '/config') {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(ui()));
   } else if (url === '/state') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(snapshot()));
   } else if (url === '/events') {

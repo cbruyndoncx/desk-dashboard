@@ -5,8 +5,10 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -131,6 +133,18 @@ static class Program
         for (int i = 0; i < 40 && !PortOpen(); i++) Thread.Sleep(250);
     }
 
+    // "secondScreen": true in config.json puts sessions on the primary screen and tabs, todos and
+    // notifications on the second. Off (or collector unreachable): other screens stay black.
+    public static bool SecondScreen()
+    {
+        try
+        {
+            using (WebClient c = new WebClient())
+                return Regex.IsMatch(c.DownloadString(Url + "config"), "\"secondScreen\"\\s*:\\s*true");
+        }
+        catch { return false; }
+    }
+
     class Saver : Form
     {
         readonly System.Windows.Forms.Timer poll = new System.Windows.Forms.Timer();
@@ -149,6 +163,8 @@ static class Program
             Cursor.Hide();
             GetCursorPos(out origin);
 
+            bool split = Program.SecondScreen();
+            Form side = null;
             foreach (Screen s in Screen.AllScreens)
             {
                 if (s.Primary) continue;
@@ -159,29 +175,21 @@ static class Program
                 f.BackColor = Color.Black;
                 f.TopMost = true;
                 f.ShowInTaskbar = false;
+                if (split && side == null) side = f;
                 f.Show();
                 FormClosed += delegate { f.Close(); };
             }
 
-            WebView2 wv = new WebView2();
-            wv.Dock = DockStyle.Fill;
-            wv.DefaultBackgroundColor = Color.Black;
-            Controls.Add(wv);
+            WebView2 wv = AddView(this);
+            WebView2 sv = side != null ? AddView(side) : null;
             Load += async delegate
             {
                 try
                 {
                     string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DeskDashboard");
                     CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(null, data);
-                    await wv.EnsureCoreWebView2Async(env);
-                    wv.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-                    wv.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                    wv.CoreWebView2.NavigationCompleted += delegate(object s, CoreWebView2NavigationCompletedEventArgs e)
-                    {
-                        if (!e.IsSuccess)
-                            wv.CoreWebView2.NavigateToString("<body style='background:#0e1116;color:#8a93a3;font:24px sans-serif;padding:60px'>Dashboard server not reachable on localhost:7777.</body>");
-                    };
-                    wv.CoreWebView2.Navigate(Url + "?since=" + since);
+                    await Open(wv, env, Url + "?since=" + since + (sv != null ? "&view=main" : ""));
+                    if (sv != null) await Open(sv, env, Url + "?since=" + since + "&view=side");
                 }
                 catch (Exception ex)
                 {
@@ -194,6 +202,28 @@ static class Program
             poll.Interval = 100;
             poll.Tick += delegate { if (InputDetected()) Close(); };
             poll.Start();
+        }
+
+        static WebView2 AddView(Form f)
+        {
+            WebView2 v = new WebView2();
+            v.Dock = DockStyle.Fill;
+            v.DefaultBackgroundColor = Color.Black;
+            f.Controls.Add(v);
+            return v;
+        }
+
+        static async System.Threading.Tasks.Task Open(WebView2 v, CoreWebView2Environment env, string url)
+        {
+            await v.EnsureCoreWebView2Async(env);
+            v.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+            v.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            v.CoreWebView2.NavigationCompleted += delegate(object s, CoreWebView2NavigationCompletedEventArgs e)
+            {
+                if (!e.IsSuccess)
+                    v.CoreWebView2.NavigateToString("<body style='background:#0e1116;color:#8a93a3;font:24px sans-serif;padding:60px'>Dashboard server not reachable on localhost:7777.</body>");
+            };
+            v.CoreWebView2.Navigate(url);
         }
 
         bool InputDetected()

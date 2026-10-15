@@ -6,6 +6,9 @@
   "notificationDir": "/mnt/c/Users/YOU/AppData/Local/Microsoft/Windows/Notifications",
   "maxNotifications": 30,
   "notificationExcludeApps": [],
+  "notificationMaxAgeHours": 0,
+  "secondScreen": false,
+  "dateLocale": "",
   "codexSessionIndexes": [
     "/home/YOU/.codex/session_index.jsonl",
     "/mnt/c/Users/YOU/.codex/session_index.jsonl"

@@ -2,3 +2,4 @@ config.json
 state.json
 *.backup.json
 *.png
+!public/*.png

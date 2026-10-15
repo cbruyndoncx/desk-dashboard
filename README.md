@@ -56,6 +56,11 @@ Edit `config.json`. The values that matter:
 | `codexSessionIndexes`, `codexSessionDirs`, `codexHomes` | Codex data folders, for WSL (`/home/YOU/.codex`) and Windows (`/mnt/c/Users/YOU/.codex`). Delete the entries for a Codex install you don't have. |
 | `agyHomes` | Antigravity CLI data folder(s), default `~/.gemini/antigravity-cli`. Delete the entry if you don't use `agy`. |
 | `sessionStaleMinutes` | Sessions idle longer than this disappear (default 240). |
+| `notificationMaxAgeHours` | Hide notifications older than this many hours (`0` = keep all until Windows expires them). |
+| `secondScreen` | `true` spreads the screensaver over two screens: agent sessions on the primary, terminal tabs, today's todos and notifications on the second. `false` (default): everything on the primary, other screens black. |
+| `dateLocale` | Locale for the clock and date, e.g. `en-GB` or `nl-BE`. Empty = Windows locale. |
+
+The collector reads `config.json` at start: restart it after a change. The `.scr` asks the collector for `secondScreen` each time it starts, so no rebuild is needed.
 
 Check that the collector runs:
 
@@ -183,9 +188,9 @@ A "demo" card appears; remove it with the same call using `"hook_event_name":"Se
 
 | Path | What |
 |---|---|
-| `server.js` | Collector: HTTP + SSE on `127.0.0.1:7777`; `GET /state`, `POST /event`, `GET /events`. Env overrides: `DASH_PORT`, `DASH_NOTE_DIR`. |
+| `server.js` | Collector: HTTP + SSE on `127.0.0.1:7777`; `GET /state`, `POST /event`, `GET /events`, `GET /config` (display settings for the `.scr`). Env overrides: `DASH_PORT`, `DASH_NOTE_DIR`. |
 | `hook.js` | Hook script: forwards hook JSON from stdin to the collector. |
-| `public/index.html` | The dashboard UI. Double-click toggles browser fullscreen. |
+| `public/index.html` | The dashboard UI. Double-click toggles browser fullscreen. `?view=main` / `?view=side` show the two halves of the two-screen layout. |
 | `run-server.sh` | Starts the collector; finds nvm's node when `node` is not on PATH (set `NODE_BIN` to override). |
 | `scr/DeskDashboard.cs` | The `.scr` host. Flags: `/s` run, `/c` info box, `/p` no-op, `/hold` test mode. |
 | `scr/build.sh` | Compiles the `.scr`. |
